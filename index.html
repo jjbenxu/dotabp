@@ -478,7 +478,7 @@ function renderOut() {
   S.tab === 'build' ? renderBuild() : renderList(S.tab);
 }
 function renderMeta() {
-  $('#meta').textContent = `Matchups from ${D.matches.toLocaleString()} ranked matches over ${D.days} days, to ${D.updated} · Overall win rates: ${liveStats ? 'live from OpenDota' : 'snapshot ' + D.updated}`;
+  $('#meta').textContent = `Matchups from ${D.matches.toLocaleString()} ranked matches ${D.patch ? 'on patch ' + D.patch + ' (' + D.days + ' days' : 'over ' + D.days + ' days ('}to ${D.updated}) · Overall win rates: ${liveStats ? 'live from OpenDota' : 'snapshot ' + D.updated}`;
 }
 function render() { renderBoard(); renderPool(); renderOut(); renderMeta(); save(); }
 

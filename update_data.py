@@ -2,7 +2,8 @@
 """Rebuild data.js (hero-vs-hero and hero-with-hero win rates) from OpenDota.
 
 Aggregates recent ranked All Pick public matches through the OpenDota explorer.
-Usage: python3 update_data.py [days]   (default 14, takes about 15 minutes)
+Usage: python3 update_data.py          (every match of the current patch; time grows with patch age)
+       python3 update_data.py <days>   (the last <days> days instead)
        python3 update_data.py meta     (refresh only heroes, items and item builds)
 """
 import json, sys, time, urllib.parse, urllib.request, datetime
@@ -129,19 +130,34 @@ def refresh_meta():
     write(data)
     print("refreshed heroes, items and item builds in data.js")
 
+def current_patch():
+    """Name and start (unix time) of the latest patch, from dota2.com.
+
+    The listed timestamp is the morning of release day, so matches count from the next midnight UTC.
+    """
+    p = get("https://www.dota2.com/datafeed/patchnoteslist?language=english")["patches"][-1]
+    return p["patch_name"], (p["patch_timestamp"] // 86400 + 1) * 86400
+
 def main():
     if sys.argv[1:] == ["meta"]:
         return refresh_meta()
-    days = int(sys.argv[1]) if len(sys.argv) > 1 else 14
+    if len(sys.argv) > 1:
+        days, patch = int(sys.argv[1]), None
+        since = int(time.time()) - days * 86400
+    else:
+        patch, since = current_patch()
+        days = max(1, round((time.time() - since) / 86400))
+        print(f"patch {patch}: {days} days of matches", flush=True)
     top = sql("SELECT match_id FROM public_matches ORDER BY match_id DESC LIMIT 1")[0]["match_id"]
-    lo_all = top - days * IDS_PER_DAY
+    lo_all = top - int((days + 1.5) * IDS_PER_DAY)   # generous id range; start_time does the exact cut
+    flt = f"{FILTER} AND start_time >= {since}"
     vs, syn = {}, {}   # "a_b" -> [games, wins of a]
     matches = 0
     hi = top
     while hi > lo_all:
         lo = max(hi - CHUNK, lo_all)
         for name, tpl, acc in (("vs", VS, vs), ("syn", SYN, syn)):
-            rows = sql(tpl.format(lo=lo, hi=hi, f=FILTER))
+            rows = sql(tpl.format(lo=lo, hi=hi, f=flt))
             if rows is None:
                 print(f"  skipped {name} chunk {lo}-{hi}", flush=True)
                 continue
@@ -169,22 +185,24 @@ def main():
                 row += [g, w]
             out[a] = row
         return out
-    heroes, items = meta()
-    data = {
-        "heroes": heroes,
-        "items": items,
-        "roles": role_builds(items),
-        "builds": builds(heroes),
+    try:   # keep the previous hero/item data so a failed refresh below cannot lose the matchups
+        raw = open("data.js").read()
+        data = json.loads(raw[raw.index("{"):].rstrip().rstrip(";"))
+    except (OSError, ValueError):
+        data = {}
+    data.update({
         "updated": datetime.date.today().isoformat(),
         "days": days,
+        "patch": patch,
         "matches": matches // 25,
         "source": "OpenDota public matches, ranked All Pick",
         "ids": ids,
         "vs": matrix(vs, False),    # vs[a] = [games, wins_of_a, ...] against each hero in ids order
         "syn": matrix(syn, True),   # syn[a] = [games, wins, ...] when on the same team
-    }
+    })
     write(data)
-    print(f"wrote data.js: {len(ids)} heroes, {data['matches']:,} matches")
+    print(f"wrote data.js: {len(ids)} heroes, {data['matches']:,} matches", flush=True)
+    refresh_meta()
 
 if __name__ == "__main__":
     main()
