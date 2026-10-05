@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dota 2 Draft Helper</title>
+<style>
+:root{
+  --bg:#0f1114; --panel:#181b20; --panel2:#20242b; --line:#2c323b; --text:#e6e8eb; --dim:#8d96a3;
+  --good:#5fc27e; --bad:#e2625a; --gold:#e0b34c; --ally:#4f9be8; --enemy:#e2625a; --ban:#8d96a3;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+button:hover{border-color:var(--dim)}
+select,input[type=search]{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
+header h1{font-size:17px;margin:0;letter-spacing:.3px}
+header .meta{color:var(--dim);font-size:12px;flex:1;min-width:200px}
+.wrap{max-width:1500px;margin:0 auto;padding:12px 16px 40px}
+
+/* draft board */
+.board{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:start;margin-bottom:12px}
+.side{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;cursor:pointer}
+.side.active{border-color:var(--c);box-shadow:0 0 0 1px var(--c) inset}
+.side h2{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--c);display:flex;justify-content:space-between}
+.side h2 span{color:var(--dim);text-transform:none;letter-spacing:0;font-weight:400}
+.ally{--c:var(--ally)} .enemy{--c:var(--enemy)} .bans{--c:var(--ban);min-width:190px}
+.slots{display:flex;gap:6px;flex-wrap:wrap}
+.ally .slots,.enemy .slots{display:grid;grid-template-columns:repeat(5,minmax(0,1fr))}
+.slot{position:relative;aspect-ratio:16/9;border-radius:6px;background:var(--panel2);border:1px dashed var(--line);overflow:hidden}
+.bans .slot{width:54px}
+.slot img{width:100%;height:100%;object-fit:cover;display:block}
+.slot.filled{border-style:solid;border-color:var(--line)}
+.slot.me{outline:2px solid var(--gold)}
+.slot .x{position:absolute;top:1px;right:1px;width:18px;height:18px;padding:0;border-radius:50%;line-height:14px;font-size:12px;background:#000a;border:none}
+.slot .nm{position:absolute;left:0;right:0;bottom:0;font-size:10px;padding:1px 3px;background:#000a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bans .slot img{filter:grayscale(1) brightness(.6)}
+.hint{color:var(--dim);font-size:12px;margin-top:6px}
+
+.cols{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:12px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.bar input[type=search]{flex:1;min-width:120px}
+
+/* hero pool */
+.pool{display:grid;grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:5px}
+.h{position:relative;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--panel2);aspect-ratio:16/10;border:1px solid transparent}
+.h:hover{border-color:var(--text)}
+.h img{width:100%;height:100%;object-fit:cover;display:block}
+.h .wr{position:absolute;right:0;bottom:0;font-size:10px;padding:0 3px;background:#000b;border-top-left-radius:4px}
+.h .n{position:absolute;left:0;top:0;right:0;font-size:9.5px;padding:0 3px;background:#000a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0}
+.h:hover .n{opacity:1}
+.h.taken{opacity:.22;pointer-events:none}
+.h.hide{display:none}
+.attr-h{grid-column:1/-1;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin-top:6px}
+
+/* tabs + lists */
+.tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.tabs button.on{background:var(--text);color:var(--bg);border-color:var(--text);font-weight:600}
+.row{display:grid;grid-template-columns:22px 64px minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 4px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:none}
+.row .rk{color:var(--dim);font-size:12px;text-align:right}
+.row img.p{width:64px;border-radius:4px;display:block;cursor:pointer}
+.row .t{font-weight:600;cursor:pointer}
+.row .t:hover{text-decoration:underline}
+.row .sub{color:var(--dim);font-size:12px}
+.chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.chip{display:inline-flex;align-items:center;gap:3px;font-size:11px;background:var(--panel2);border-radius:10px;padding:1px 6px 1px 1px;border:1px solid var(--line)}
+.chip img{width:22px;height:13px;object-fit:cover;border-radius:7px}
+.chip.s{border-color:#2f4a6b}
+.score{font-weight:700;font-size:15px;text-align:right;min-width:58px}
+.acts{display:flex;gap:4px;margin-top:3px;justify-content:flex-end}
+.acts button{font-size:11px;padding:2px 7px}
+.g{color:var(--good)} .b{color:var(--bad)} .dim{color:var(--dim)}
+.empty{color:var(--dim);padding:18px 4px}
+
+/* build tab */
+.hero-head{display:flex;gap:12px;align-items:center;margin-bottom:10px}
+.hero-head img{width:120px;border-radius:6px}
+.hero-head h3{margin:0;font-size:18px}
+h4{margin:16px 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+.brackets{display:grid;grid-template-columns:repeat(auto-fit,minmax(70px,1fr));gap:4px}
+.brk{background:var(--panel2);border-radius:6px;padding:5px 6px;text-align:center;font-size:11px;color:var(--dim)}
+.brk b{display:block;font-size:14px;color:var(--text)}
+.item{display:grid;grid-template-columns:52px minmax(0,1fr);gap:10px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)}
+.item:last-child{border-bottom:none}
+.item img,.pi img{width:52px;border-radius:4px;display:block;background:var(--panel2)}
+.item .why{font-size:12px;color:var(--dim)}
+.phase{display:flex;flex-wrap:wrap;gap:6px}
+.pi{width:64px;text-align:center;font-size:10px;color:var(--dim)}
+.pi img{width:64px}
+.pi .pn{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.mu{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:6px;align-items:center;padding:3px 0;font-size:13px}
+.mu img{width:40px;border-radius:3px;display:block}
+.note{font-size:12px;color:var(--dim);margin-top:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{border:none;border-radius:0;padding:3px 10px;font-size:12px}
+.seg button.on{background:var(--text);color:var(--bg)}
+
+@media (max-width:980px){
+  .cols{grid-template-columns:1fr}
+  .board{grid-template-columns:1fr}
+  .bans .slot{width:calc((100% - 36px)/7)}
+  .two{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Dota 2 Draft Helper</h1>
+  <div class="meta" id="meta"></div>
+  <label>Rank
+    <select id="bracket">
+      <option value="all">All ranks</option>
+      <option value="0">Herald</option><option value="1">Guardian</option><option value="2">Crusader</option>
+      <option value="3">Archon</option><option value="4">Legend</option><option value="5">Ancient</option>
+      <option value="6">Divine</option><option value="7">Immortal</option><option value="pro">Pro matches</option>
+    </select>
+  </label>
+  <button id="reset">Reset draft</button>
+</header>
+
+<div class="wrap">
+  <div class="board">
+    <div class="side ally" data-mode="allies">
+      <h2>Your team <span>click a portrait to mark your hero</span></h2>
+      <div class="slots" id="allies"></div>
+    </div>
+    <div class="side bans" data-mode="bans">
+      <h2>Bans</h2>
+      <div class="slots" id="bans"></div>
+    </div>
+    <div class="side enemy" data-mode="enemies">
+      <h2>Enemy team</h2>
+      <div class="slots" id="enemies"></div>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <div class="bar">
+        <input type="search" id="q" placeholder="Search hero…" autocomplete="off">
+        <span class="dim" id="modeHint"></span>
+      </div>
+      <div class="pool" id="pool"></div>
+    </div>
+
+    <div class="panel">
+      <div class="tabs">
+        <button data-tab="pick">Pick suggestions</button>
+        <button data-tab="ban">Ban suggestions</button>
+        <button data-tab="build">Matchups &amp; items</button>
+        <select id="role" style="margin-left:auto">
+          <option value="">Any role</option>
+          <option>Carry</option><option>Support</option><option>Nuker</option><option>Disabler</option>
+          <option>Initiator</option><option>Durable</option><option>Escape</option><option>Pusher</option>
+        </select>
+      </div>
+      <div id="out"></div>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+(() => {
+const D = window.DRAFT_DATA;
+const $ = s => document.querySelector(s);
+if (!D) { $('#out').innerHTML = '<div class="empty">data.js is missing. Run <code>python3 update_data.py</code> next to this file.</div>'; return; }
+
+const CDN = 'https://cdn.cloudflare.steamstatic.com/apps/dota2/images/dota_react';
+const API = 'https://api.opendota.com/api';
+const heroImg = h => `${CDN}/heroes/${h.key}.png`;
+const itemImg = key => `${CDN}/items/${key.startsWith('recipe') ? 'recipe' : key}.png`;
+const BRACKETS = ['Herald','Guardian','Crusader','Archon','Legend','Ancient','Divine','Immortal'];
+const MIN_GAMES = 100, SHRINK = 300;
+
+const H = new Map(D.heroes.map(h => [h.id, h]));
+const byKey = new Map(D.heroes.map(h => [h.key, h]));
+const IDX = new Map(D.ids.map((id, i) => [id, i]));
+const ITEM_BY_KEY = {};
+for (const [id, [key, name, cost]] of Object.entries(D.items)) ITEM_BY_KEY[key] = { id, key, name, cost };
+
+/* ---------- counter-item rules (curated game knowledge, not statistics) ---------- */
+const list = s => s.trim().split(/\s+/);
+// aud: who usually buys it. core / support / any. melee: melee heroes only.
+const ITEM_AUD = {
+  monkey_king_bar:'core', mjollnir:'core', bfury:'core-melee', shivas_guard:'core', spirit_vessel:'any', skadi:'core',
+  silver_edge:'core', dust:'any', gem:'any', black_king_bar:'core', pipe:'any', glimmer_cape:'support', mage_slayer:'core',
+  eternal_shroud:'core', sphere:'core', lotus_orb:'any', aeon_disk:'any', ghost:'support', heavens_halberd:'any',
+  assault:'core', solar_crest:'support', crimson_guard:'any', orchid:'core', sheepstick:'any', rod_of_atos:'any',
+  abyssal_blade:'core-melee', nullifier:'core', diffusal_blade:'core', manta:'core', cyclone:'any', force_staff:'any',
+  blade_mail:'core',
+};
+const TRAITS = [
+  { name:'evasion', w:3, heroes:list('phantom_assassin windrunner brewmaster arc_warden hoodwink'),
+    items:{ monkey_king_bar:'True Strike stops your attacks missing against their evasion' } },
+  { name:'illusions', w:2, heroes:list('phantom_lancer naga_siren terrorblade chaos_knight meepo arc_warden spectre dark_seer'),
+    items:{ mjollnir:'Chain lightning clears illusions and clones', bfury:'Cleave clears illusions and reveals the real hero',
+            shivas_guard:'Area damage and attack slow against illusion armies', crimson_guard:'Damage block is strong against many weak hits' } },
+  { name:'summons', w:2, heroes:list('lycan beastmaster chen enchantress furion broodmother visage lone_druid warlock venomancer shadow_shaman undying enigma'),
+    items:{ crimson_guard:'Damage block blunts summons and pushes', mjollnir:'Chain lightning clears summons' } },
+  { name:'healing', w:2, heroes:list('huskar alchemist necrolyte morphling wisp dazzle oracle chen witch_doctor omniknight abaddon life_stealer slark bloodseeker dragon_knight legion_commander troll_warlord skeleton_king undying warlock pudge treant enchantress phoenix dawnbreaker winter_wyvern juggernaut broodmother'),
+    items:{ spirit_vessel:'Cuts their healing, regen and lifesteal', shivas_guard:'Aura reduces healing and lifesteal in fights',
+            skadi:'Attacks reduce their healing and lifesteal' } },
+  { name:'passives', w:3, heroes:list('bristleback phantom_assassin spectre huskar viper enchantress antimage drow_ranger dragon_knight mars axe shredder spirit_breaker monkey_king slardar abyssal_underlord'),
+    items:{ silver_edge:'Break switches off the passive they rely on' } },
+  { name:'invisibility', w:2, heroes:list('riki bounty_hunter clinkz weaver nyx_assassin templar_assassin mirana sand_king invoker treant techies'),
+    items:{ dust:'Reveals them when they go invisible', gem:'Permanent true sight around the carrier' } },
+  { name:'magic damage', heroes:list('lina lion zuus skywrath_mage leshrac tinker invoker queenofpain pugna necrolyte lich puck storm_spirit death_prophet jakiro crystal_maiden witch_doctor ancient_apparition venomancer phoenix sand_king earthshaker tiny techies snapfire dark_willow grimstroke warlock disruptor hoodwink ogre_magi void_spirit keeper_of_the_light rubick enigma ringmaster batrider abyssal_underlord centaur tidehunter elder_titan'),
+    items:{ black_king_bar:'Spell immunity through their magic damage and disables', pipe:'Team-wide magic barrier',
+            glimmer_cape:'Cheap magic resistance and a save for a teammate', mage_slayer:'Reduces the spell damage of whoever you hit',
+            eternal_shroud:'Magic resistance and mana back from their spells' } },
+  { name:'single-target spells', heroes:list('doom_bringer legion_commander bane batrider beastmaster necrolyte lion lina bloodseeker primal_beast shadow_shaman pudge spirit_breaker tinker skywrath_mage ogre_magi rubick sniper terrorblade night_stalker huskar grimstroke obsidian_destroyer shadow_demon viper morphling vengefulspirit'),
+    items:{ sphere:'Blocks their key targeted spell', lotus_orb:'Reflects targeted spells and dispels the debuff' } },
+  { name:'burst', heroes:list('phantom_assassin lina lion tinker nyx_assassin templar_assassin zuus skywrath_mage storm_spirit tiny clinkz morphling'),
+    items:{ aeon_disk:'Survive the initial burst so you can react', blade_mail:'Punishes them for jumping on you' } },
+  { name:'right-click damage', heroes:list('phantom_assassin juggernaut sven ursa troll_warlord templar_assassin drow_ranger sniper slark life_stealer luna medusa gyrocopter monkey_king chaos_knight skeleton_king faceless_void antimage terrorblade phantom_lancer naga_siren lycan clinkz weaver riki razor huskar windrunner lone_druid broodmother morphling nevermore tiny kunkka dragon_knight legion_commander muerta marci kez alchemist bloodseeker meepo arc_warden slardar night_stalker dawnbreaker'),
+    items:{ ghost:'Become immune to physical attacks while they are on you', heavens_halberd:'Disarms their main damage dealer',
+            assault:'Armor aura for your team, minus armor on theirs', shivas_guard:'Armor plus an attack-speed slow aura',
+            solar_crest:'Armor and a barrier on the teammate being hit' } },
+  { name:'mobility', heroes:list('antimage queenofpain storm_spirit ember_spirit void_spirit puck weaver slark morphling pangolier earth_spirit faceless_void mirana riki shredder monkey_king hoodwink windrunner kez batrider sand_king phantom_lancer nyx_assassin clinkz dark_willow marci primal_beast tusk'),
+    items:{ orchid:'Silence stops them escaping with spells', sheepstick:'Instant hex pins slippery heroes',
+            rod_of_atos:'Root stops blinks and other movement spells', abyssal_blade:'Instant stun that goes through spell immunity' } },
+  { name:'dispellable buffs', heroes:list('omniknight necrolyte pugna windrunner ogre_magi lich treant dark_seer legion_commander ember_spirit abaddon'),
+    items:{ nullifier:'Strips their defensive buffs and save items' } },
+  { name:'mana reliance', heroes:list('medusa storm_spirit skeleton_king bristleback shredder leshrac tinker'),
+    items:{ diffusal_blade:'Mana burn hurts heroes that need their mana pool' } },
+  { name:'silences', heroes:list('silencer death_prophet skywrath_mage drow_ranger riki night_stalker bloodseeker puck disruptor earth_spirit doom_bringer'),
+    items:{ manta:'Dispels silences on use', cyclone:'Dispels silences from yourself', lotus_orb:'Dispels silences from you or a teammate',
+            black_king_bar:'Spell immunity through their magic damage and disables' } },
+  { name:'traps and chasers', heroes:list('rattletrap mars disruptor slark riki abyssal_underlord ursa viper pudge life_stealer troll_warlord'),
+    items:{ force_staff:'Pushes you or a teammate out of their trap or reach' } },
+];
+
+/* ---------- state ---------- */
+const S = Object.assign({ allies:[], enemies:[], bans:[], me:null, focus:null, mode:'enemies', bracket:'all', role:'', tab:'pick', aud:null },
+  (() => { try { return JSON.parse(localStorage.getItem('draft') || '{}'); } catch { return {}; } })());
+for (const k of ['allies','enemies','bans']) S[k] = (S[k] || []).filter(id => H.has(id));
+if (!H.has(S.me)) S.me = null;
+if (!H.has(S.focus)) S.focus = null;
+const save = () => { try { localStorage.setItem('draft', JSON.stringify(S)); } catch {} };
+const LIMIT = { allies:5, enemies:5, bans:14 };
+const taken = () => new Set([...S.allies, ...S.enemies, ...S.bans]);
+let liveStats = false;
+
+/* ---------- stats ---------- */
+const cell = (tbl, a, b) => { const r = tbl[a], i = IDX.get(b); return r && i !== undefined ? [r[2*i], r[2*i+1]] : [0, 0]; };
+const MWR = new Map();   // win rate inside the matchup dataset
+for (const id of D.ids) { const r = D.vs[id]; let g = 0, w = 0; for (let i = 0; i < r.length; i += 2) { g += r[i]; w += r[i+1]; } MWR.set(id, g ? w / g : .5); }
+const mwr = id => MWR.get(id) ?? .5;
+
+function bracketWR(h, br = S.bracket) {
+  let p = 0, w = 0;
+  if (br === 'pro') [p, w] = h.pro;
+  else if (br === 'all') for (const [bp, bw] of h.b) { p += bp; w += bw; }
+  else [p, w] = h.b[+br];
+  return p >= 20 ? { wr: w / p, picks: p } : { wr: null, picks: p };
+}
+const baseWR = h => bracketWR(h).wr ?? bracketWR(h, 'all').wr ?? mwr(h.id);
+
+// How much better a does against b than both heroes' overall win rates predict.
+function adv(a, b) {
+  const [g, w] = cell(D.vs, a, b);
+  if (g < MIN_GAMES) return { v: 0, g, wr: null };
+  const wr = w / g;
+  return { v: (wr - mwr(a) - (.5 - mwr(b))) * g / (g + SHRINK), g, wr };
+}
+// How much better a and b do on the same team than their overall win rates predict.
+function syn(a, b) {
+  const [g, w] = cell(D.syn, a, b);
+  if (g < MIN_GAMES) return { v: 0, g, wr: null };
+  const wr = w / g;
+  return { v: (wr - mwr(a) - (mwr(b) - .5)) * g / (g + SHRINK), g, wr };
+}
+function rank(against, withTeam) {
+  const t = taken(), out = [];
+  for (const h of D.heroes) {
+    if (t.has(h.id) || !IDX.has(h.id)) continue;
+    if (S.role && !h.roles.includes(S.role)) continue;
+    const base = baseWR(h) - .5;
+    const vs = against.map(e => ({ id: e, ...adv(h.id, e) }));
+    const wi = withTeam.map(a => ({ id: a, ...syn(h.id, a) }));
+    out.push({ h, base, vs, wi, score: base + vs.reduce((s, x) => s + x.v, 0) + wi.reduce((s, x) => s + x.v, 0) });
+  }
+  return out.sort((a, b) => b.score - a.score);
+}
+
+/* ---------- rendering ---------- */
+const pct = (x, d = 1) => (x * 100).toFixed(d) + '%';
+const signed = x => `<span class="${x >= 0 ? 'g' : 'b'}">${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}%</span>`;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+
+function renderBoard() {
+  for (const k of ['allies','enemies','bans']) {
+    let html = '';
+    for (let i = 0; i < LIMIT[k]; i++) {
+      const h = H.get(S[k][i]);
+      html += h
+        ? `<div class="slot filled ${k === 'allies' && S.me === h.id ? 'me' : ''}" data-slot="${k}" data-id="${h.id}" title="${esc(h.name)}">
+             <img src="${heroImg(h)}" alt="${esc(h.name)}" loading="lazy">${k === 'bans' ? '' : `<div class="nm">${esc(h.name)}</div>`}
+             <button class="x" data-rm="${k}" data-id="${h.id}" aria-label="Remove ${esc(h.name)}">×</button></div>`
+        : (k === 'bans' && i > S.bans.length ? '' : '<div class="slot"></div>');
+    }
+    $('#' + k).innerHTML = html;
+  }
+  document.querySelectorAll('.side').forEach(el => el.classList.toggle('active', el.dataset.mode === S.mode));
+  $('#modeHint').textContent = { allies:'Clicking a hero adds it to your team', enemies:'Clicking a hero adds it to the enemy team', bans:'Clicking a hero bans it' }[S.mode];
+}
+
+function renderPool() {
+  const t = taken(), q = $('#q').value.trim().toLowerCase();
+  const groups = { str:'Strength', agi:'Agility', int:'Intelligence', all:'Universal' };
+  let html = '';
+  for (const [attr, label] of Object.entries(groups)) {
+    const hs = D.heroes.filter(h => h.attr === attr).sort((a, b) => a.name.localeCompare(b.name));
+    if (!hs.length) continue;
+    const shown = hs.filter(h => !q || h.name.toLowerCase().includes(q) || h.key.includes(q));
+    if (!shown.length) continue;
+    html += `<div class="attr-h">${label}</div>`;
+    for (const h of shown) {
+      const wr = bracketWR(h).wr;
+      html += `<div class="h ${t.has(h.id) ? 'taken' : ''}" data-add="${h.id}" title="${esc(h.name)}">
+        <img src="${heroImg(h)}" alt="${esc(h.name)}" loading="lazy"><div class="n">${esc(h.name)}</div>
+        <div class="wr ${wr === null ? 'dim' : wr >= .5 ? 'g' : 'b'}">${wr === null ? '–' : pct(wr)}</div></div>`;
+    }
+  }
+  $('#pool').innerHTML = html || '<div class="empty">No hero matches.</div>';
+}
+
+const chip = (x, cls) => { const h = H.get(x.id); return `<span class="chip ${cls}" title="${esc(h.name)}: ${x.wr === null ? 'not enough games' : pct(x.wr) + ' win rate over ' + x.g.toLocaleString() + ' games'}"><img src="${heroImg(h)}" alt="${esc(h.name)}">${signed(x.v)}</span>`; };
+
+function renderList(kind) {
+  const rows = kind === 'pick' ? rank(S.enemies, S.allies) : rank(S.allies, S.enemies);
+  const ctx = kind === 'pick'
+    ? (S.enemies.length || S.allies.length ? 'Best picks into the enemy heroes, counting synergy with your team.' : 'No heroes picked yet, so this is ranked by overall win rate. Add enemy heroes to see counters.')
+    : (S.allies.length || S.enemies.length ? 'The strongest heroes the enemy could still pick against your team. Ban these.' : 'No heroes picked yet, so this is ranked by overall win rate. Add your team to see what threatens it.');
+  let html = `<div class="note" style="margin:0 0 8px">${ctx}</div>`;
+  if (!rows.length) html += '<div class="empty">No heroes left for this filter.</div>';
+  rows.slice(0, 25).forEach((r, i) => {
+    const h = r.h, wr = bracketWR(h);
+    html += `<div class="row">
+      <div class="rk">${i + 1}</div>
+      <img class="p" src="${heroImg(h)}" alt="${esc(h.name)}" data-focus="${h.id}" loading="lazy">
+      <div><span class="t" data-focus="${h.id}">${esc(h.name)}</span>
+        <div class="sub">${wr.wr === null ? 'no data at this rank' : pct(wr.wr) + ' win rate · ' + wr.picks.toLocaleString() + ' games'} · ${esc(h.roles.slice(0, 3).join(', '))}</div>
+        <div class="chips">${r.vs.map(x => chip(x, '')).join('')}${r.wi.map(x => chip(x, 's')).join('')}</div></div>
+      <div><div class="score">${signed(r.score)}</div>
+        <div class="acts">${kind === 'pick' ? `<button data-do="allies" data-id="${h.id}">Pick</button>` : `<button data-do="bans" data-id="${h.id}">Ban</button>`}</div></div>
+    </div>`;
+  });
+  if (rows.length) html += `<div class="note">The score is the estimated win-rate edge: the hero's win rate at the selected rank minus 50%, plus its matchup edge against each opposing hero (plain chips) and its synergy with each teammate (blue chips). Hover a chip for the raw win rate and game count.</div>`;
+  $('#out').innerHTML = html;
+}
+
+const popCache = new Map();
+async function loadPopularity(id) {
+  if (popCache.has(id)) return popCache.get(id);
+  const p = fetch(`${API}/heroes/${id}/itemPopularity`).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+  popCache.set(id, p);
+  p.catch(() => popCache.delete(id));
+  return p;
+}
+
+function counterItems(h, aud) {
+  const melee = h.atk === 'Melee', scored = {};
+  for (const e of S.enemies) {
+    const eh = H.get(e);
+    for (const tr of TRAITS) {
+      if (!tr.heroes.includes(eh.key)) continue;
+      for (const [key, why] of Object.entries(tr.items)) {
+        const a = ITEM_AUD[key] || 'any';
+        if (a.endsWith('-melee') && !melee) continue;
+        if (a.startsWith('core') && aud !== 'core') continue;
+        if (a === 'support' && aud !== 'support') continue;
+        if (!ITEM_BY_KEY[key]) continue;
+        const s = scored[key] ??= { key, score: 0, reasons: new Map() };
+        s.score += tr.w || 1;
+        if (!s.reasons.has(why)) s.reasons.set(why, new Set());
+        s.reasons.get(why).add(e);
+      }
+    }
+  }
+  return Object.values(scored)
+    .sort((a, b) => b.score - a.score || ITEM_BY_KEY[a.key].cost - ITEM_BY_KEY[b.key].cost);
+}
+
+function renderBuild() {
+  const h = H.get(S.focus ?? S.me ?? S.allies[0]);
+  if (!h) { $('#out').innerHTML = '<div class="empty">Pick your hero (add it to your team), or click any hero name in the suggestions, to see its matchups and items.</div>'; return; }
+  const aud = S.aud ?? (h.roles.includes('Carry') || !h.roles.includes('Support') ? 'core' : 'support');
+  const all = bracketWR(h, 'all');
+  let html = `<div class="hero-head"><img src="${heroImg(h)}" alt="${esc(h.name)}">
+    <div><h3>${esc(h.name)}</h3><div class="sub dim">${esc(h.atk)} · ${esc(h.roles.join(', '))}</div>
+    <div class="sub">${all.wr === null ? '' : `<b>${pct(all.wr)}</b> win rate over ${all.picks.toLocaleString()} ranked games`}</div></div></div>`;
+
+  html += '<h4>Win rate by rank</h4><div class="brackets">';
+  BRACKETS.forEach((name, i) => { const b = bracketWR(h, String(i)); if (b.picks) html += `<div class="brk">${name}<b class="${b.wr === null ? '' : b.wr >= .5 ? 'g' : 'b'}">${b.wr === null ? '–' : pct(b.wr)}</b></div>`; });
+  const pro = bracketWR(h, 'pro');
+  html += `<div class="brk">Pro<b>${pro.wr === null ? '–' : pct(pro.wr, 0)}</b>${h.pro[0]} picks · ${h.pro[2]} bans</div></div>`;
+
+  html += `<h4>Items against the enemy draft <span class="seg" style="margin-left:8px"><button data-aud="core" class="${aud === 'core' ? 'on' : ''}">Core</button><button data-aud="support" class="${aud === 'support' ? 'on' : ''}">Support</button></span></h4>`;
+  if (!S.enemies.length) html += '<div class="dim">Add enemy heroes to see which items answer them.</div>';
+  else {
+    const items = counterItems(h, aud).slice(0, 9);
+    html += items.length ? items.map(it => {
+      const info = ITEM_BY_KEY[it.key];
+      const why = [...it.reasons].map(([text, ids]) => `${esc(text)} <span class="chips" style="display:inline-flex;vertical-align:middle;margin:0">${[...ids].map(id => `<span class="chip" style="padding:1px" title="${esc(H.get(id).name)}"><img src="${heroImg(H.get(id))}" alt="${esc(H.get(id).name)}"></span>`).join('')}</span>`).join('<br>');
+      return `<div class="item"><img src="${itemImg(it.key)}" alt="" loading="lazy"><div><b>${esc(info.name)}</b> <span class="dim">${info.cost.toLocaleString()} gold</span><div class="why">${why}</div></div></div>`;
+    }).join('') : '<div class="dim">No specific counter items for these enemies.</div>';
+    html += '<div class="note">These are rule-based suggestions from general game knowledge, matched to what each enemy hero does. They are not computed from match statistics.</div>';
+  }
+
+  html += '<h4>Most bought items (pro matches)</h4><div id="pop" class="dim">Loading…</div>';
+
+  if (IDX.has(h.id)) {
+    const mus = D.heroes.filter(o => o.id !== h.id && IDX.has(o.id)).map(o => ({ o, ...adv(h.id, o.id) })).filter(m => m.wr !== null).sort((a, b) => b.v - a.v);
+    const col = (title, arr) => `<div><h4>${title}</h4>${arr.map(m => `<div class="mu"><img src="${heroImg(m.o)}" alt="" loading="lazy"><span>${esc(m.o.name)}</span><span title="${m.g.toLocaleString()} games">${pct(m.wr)} ${signed(m.v)}</span></div>`).join('')}</div>`;
+    html += `<div class="two">${col('Best against', mus.slice(0, 10))}${col('Worst against', mus.slice(-10).reverse())}</div>
+      <div class="note">Win rate of ${esc(h.name)} in games against that hero, and the edge after removing both heroes' overall strength.</div>`;
+  }
+  $('#out').innerHTML = html;
+
+  loadPopularity(h.id).then(pop => {
+    const el = $('#pop'); if (!el || (S.focus ?? S.me ?? S.allies[0]) !== h.id) return;
+    const phases = [['start_game_items','Starting'],['early_game_items','Early game'],['mid_game_items','Mid game'],['late_game_items','Late game']];
+    el.className = '';
+    el.innerHTML = phases.map(([k, label]) => {
+      const top = Object.entries(pop[k] || {}).map(([id, n]) => ({ it: D.items[id], n })).filter(x => x.it && !x.it[0].startsWith('recipe')).sort((a, b) => b.n - a.n).slice(0, 7);
+      if (!top.length) return '';
+      const max = top[0].n;
+      return `<div class="sub dim" style="margin:8px 0 4px">${label}</div><div class="phase">${top.map(x => `<div class="pi" title="${esc(x.it[1])}: bought ${x.n} times"><img src="${itemImg(x.it[0])}" alt="" loading="lazy"><div class="pn">${esc(x.it[1])}</div>${Math.round(x.n / max * 100)}%</div>`).join('')}</div>`;
+    }).join('') + '<div class="note">Percentages are relative to the most bought item in each phase.</div>' || 'No item data for this hero.';
+  }).catch(() => { const el = $('#pop'); if (el) el.textContent = 'Could not load item data from OpenDota right now. Reopen this tab to retry.'; });
+}
+
+function renderOut() {
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
+  $('#role').style.visibility = S.tab === 'build' ? 'hidden' : 'visible';
+  S.tab === 'build' ? renderBuild() : renderList(S.tab);
+}
+function renderMeta() {
+  $('#meta').textContent = `Matchups from ${D.matches.toLocaleString()} ranked matches over ${D.days} days, to ${D.updated} · Overall win rates: ${liveStats ? 'live from OpenDota' : 'snapshot ' + D.updated}`;
+}
+function render() { renderBoard(); renderPool(); renderOut(); renderMeta(); save(); }
+
+/* ---------- actions ---------- */
+function add(mode, id) {
+  if (taken().has(id) || S[mode].length >= LIMIT[mode]) return;
+  S[mode].push(id);
+  if (mode === 'allies' && S.me === null) S.me = id;
+  render();
+}
+function remove(mode, id) {
+  S[mode] = S[mode].filter(x => x !== id);
+  if (S.me === id) S.me = S.allies[0] ?? null;
+  render();
+}
+document.addEventListener('click', e => {
+  const t = e.target;
+  let el;
+  if ((el = t.closest('[data-rm]'))) { e.stopPropagation(); return remove(el.dataset.rm, +el.dataset.id); }
+  if ((el = t.closest('[data-slot="allies"]'))) { S.me = +el.dataset.id; S.focus = null; S.aud = null; S.mode = 'allies'; return render(); }
+  if ((el = t.closest('[data-add]'))) return add(S.mode, +el.dataset.add);
+  if ((el = t.closest('[data-do]'))) return add(el.dataset.do, +el.dataset.id);
+  if ((el = t.closest('[data-focus]'))) { S.focus = +el.dataset.focus; S.aud = null; S.tab = 'build'; return render(); }
+  if ((el = t.closest('[data-aud]'))) { S.aud = el.dataset.aud; return render(); }
+  if ((el = t.closest('[data-tab]'))) { S.tab = el.dataset.tab; if (S.tab !== 'build') S.focus = null; return render(); }
+  if ((el = t.closest('.side'))) { S.mode = el.dataset.mode; return render(); }
+});
+$('#q').addEventListener('input', renderPool);
+$('#q').addEventListener('keydown', e => {
+  if (e.key !== 'Enter') return;
+  const first = document.querySelector('#pool .h:not(.taken)');
+  if (first) { add(S.mode, +first.dataset.add); e.target.value = ''; renderPool(); }
+});
+$('#bracket').value = S.bracket; $('#role').value = S.role;
+$('#bracket').addEventListener('change', e => { S.bracket = e.target.value; render(); });
+$('#role').addEventListener('change', e => { S.role = e.target.value; render(); });
+$('#reset').addEventListener('click', () => { Object.assign(S, { allies:[], enemies:[], bans:[], me:null, focus:null, aud:null }); render(); });
+
+render();
+
+// Refresh overall win rates from OpenDota; the page keeps working from the snapshot if this fails.
+fetch(`${API}/heroStats`).then(r => r.ok ? r.json() : Promise.reject()).then(rows => {
+  for (const r of rows) {
+    const h = H.get(r.id); if (!h) continue;
+    h.b = BRACKETS.map((_, i) => [r[`${i + 1}_pick`] || 0, r[`${i + 1}_win`] || 0]);
+    h.pro = [r.pro_pick || 0, r.pro_win || 0, r.pro_ban || 0];
+  }
+  liveStats = true; render();
+}).catch(() => {});
+})();
+</script>
+</body>
+</html>
