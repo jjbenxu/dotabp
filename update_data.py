@@ -77,6 +77,44 @@ def builds(heroes):
         time.sleep(1.1)
     return out
 
+ROLE_CTE = """WITH p AS (SELECT pm.hero_id, ((pm.player_slot < 128) = m.radiant_win) AS win,
+rank() OVER (PARTITION BY pm.match_id, pm.player_slot < 128 ORDER BY pm.net_worth DESC) AS r,
+ARRAY[pm.item_0,pm.item_1,pm.item_2,pm.item_3,pm.item_4,pm.item_5] AS items
+FROM player_matches pm JOIN matches m USING (match_id)
+WHERE m.start_time > extract(epoch from now() - interval '{a} days')
+AND m.start_time <= extract(epoch from now() - interval '{b} days')) """
+
+def role_builds(items, days=180, step=60):
+    """Per hero, final-inventory items in pro matches split by farm priority.
+
+    Support = 4th or 5th in net worth on the team. Returns
+    {hero_id: {"c": [games, wins, {item_key: [games, wins]}], "s": [...]}}.
+    """
+    out = {}
+    for b in range(0, days, step):
+        cte = ROLE_CTE.format(a=b + step, b=b)
+        counts = sql(cte + "SELECT hero_id, (r >= 4) AS sup, count(*) g, sum(CASE WHEN win THEN 1 ELSE 0 END) w FROM p GROUP BY 1, 2")
+        time.sleep(1.1)
+        rows = sql(cte + "SELECT hero_id, (r >= 4) AS sup, item, count(*) g, sum(CASE WHEN win THEN 1 ELSE 0 END) w "
+                         "FROM p, unnest(items) item WHERE item > 0 GROUP BY 1, 2, 3")
+        time.sleep(1.1)
+        if counts is None or rows is None:
+            sys.exit("could not load pro role builds; data.js left unchanged")
+        for r in counts:
+            c = out.setdefault(r["hero_id"], {"c": [0, 0, {}], "s": [0, 0, {}]})["s" if r["sup"] else "c"]
+            c[0] += int(r["g"]); c[1] += int(r["w"])
+        for r in rows:
+            key = items.get(r["item"], items.get(str(r["item"]), [None]))[0]
+            if not key or key.startswith("recipe"):
+                continue
+            c = out[r["hero_id"]]["s" if r["sup"] else "c"][2].setdefault(key, [0, 0])
+            c[0] += int(r["g"]); c[1] += int(r["w"])
+        print(f"pro role builds: {b + step}/{days} days", flush=True)
+    for h in out.values():
+        for side in ("c", "s"):
+            h[side][2] = {k: v for k, v in h[side][2].items() if v[0] >= 3}
+    return out
+
 def write(data):
     with open("data.js", "w") as f:
         f.write("window.DRAFT_DATA = " + json.dumps(data, separators=(",", ":")) + ";\n")
@@ -86,6 +124,7 @@ def refresh_meta():
     raw = open("data.js").read()
     data = json.loads(raw[raw.index("{"):].rstrip().rstrip(";"))
     data["heroes"], data["items"] = meta()
+    data["roles"] = role_builds(data["items"])
     data["builds"] = builds(data["heroes"])
     write(data)
     print("refreshed heroes, items and item builds in data.js")
@@ -134,6 +173,7 @@ def main():
     data = {
         "heroes": heroes,
         "items": items,
+        "roles": role_builds(items),
         "builds": builds(heroes),
         "updated": datetime.date.today().isoformat(),
         "days": days,

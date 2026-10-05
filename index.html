@@ -362,12 +362,34 @@ function heroBuild(h) {
   for (const [key, [g, w, min]] of Object.entries(b)) out[key] = { key, g, wr: w / g, min, share: g / top };
   return out;
 }
+// Pro-match builds split by role: side 'c' (core) or 's' (support, 4th-5th net worth on the team).
+function roleBuild(h, side) {
+  const r = (D.roles || {})[h.id]?.[side]; if (!r) return null;
+  const pub = heroBuild(h), items = {};
+  for (const [key, [g, w]] of Object.entries(r[2])) items[key] = { key, g, wr: w / g, share: Math.min(1, g / r[0]), min: pub[key]?.min };
+  return { games: r[0], wr: r[0] ? r[1] / r[0] : null, items };
+}
+// A hero counts as flexible when each role has a real share of its pro games.
+function isFlex(h) {
+  const r = (D.roles || {})[h.id]; if (!r) return false;
+  const c = r.c[0], sp = r.s[0];
+  return Math.min(c, sp) >= 40 && Math.min(c, sp) / (c + sp) >= .2;
+}
+// Drop components the hero usually upgrades, keep assembled items, order by usual timing then cost.
+const when = x => x.min ?? ITEM_BY_KEY[x.key].cost / 250;   // no timing data: guess from cost
+function route(build, minShare, n) {
+  const upgraded = new Set();
+  for (const x of Object.values(build)) if (x.share >= minShare) for (const c of ITEM_BY_KEY[x.key]?.comps || []) if (build[c] && x.g >= .4 * build[c].g) upgraded.add(c);
+  return Object.values(build).filter(x => ITEM_BY_KEY[x.key]?.built && x.share >= minShare && !upgraded.has(x.key))
+    .sort((a, b) => b.g - a.g).slice(0, n)
+    .sort((a, b) => when(a) - when(b));
+}
 const ALWAYS = new Set(['dust', 'gem']);   // cheap detection, anyone can carry it
 const MIN_SHARE = .004;
 
 // Counter items for the enemy draft, limited to items this hero is actually seen building.
-function counterItems(h) {
-  const build = heroBuild(h), scored = {};
+function counterItems(h, build) {
+  const scored = {};
   for (const e of S.enemies) {
     const eh = H.get(e);
     for (const tr of TRAITS) {
@@ -399,25 +421,32 @@ function renderBuild() {
   const pro = bracketWR(h, 'pro');
   html += `<div class="brk">Pro<b>${pro.wr === null ? '–' : pct(pro.wr, 0)}</b>${h.pro[0]} picks · ${h.pro[2]} bans</div></div>`;
 
-  const build = heroBuild(h);
-  // hide an item when the hero usually goes on to upgrade it into something else in the list
-  const upgraded = new Set();
-  for (const x of Object.values(build)) if (x.share >= .05) for (const c of ITEM_BY_KEY[x.key]?.comps || []) if (build[c] && x.g >= .4 * build[c].g) upgraded.add(c);
-  const core = Object.values(build).filter(x => ITEM_BY_KEY[x.key]?.built && x.share >= .05 && !upgraded.has(x.key)).sort((a, b) => b.g - a.g).slice(0, 12).sort((a, b) => a.min - b.min);
-  html += `<h4>Typical ${esc(h.name)} build</h4>`;
+  const pubBuild = heroBuild(h), flex = isFlex(h);
+  const side = flex ? (S.aud ?? (D.roles[h.id].c[0] >= D.roles[h.id].s[0] ? 'c' : 's')) : null;
+  const build = flex ? roleBuild(h, side).items : pubBuild;
+  if (flex) {
+    for (const [sd, label] of [['c', 'Core'], ['s', 'Support']]) {
+      const rb = roleBuild(h, sd), items = route(rb.items, .08, 10);
+      html += `<h4>${label} ${esc(h.name)} build <span style="text-transform:none;letter-spacing:0">· ${rb.games.toLocaleString()} pro games, ${pct(rb.wr, 0)} win rate</span></h4>
+        <div class="phase">${items.map(x => `<div class="pi" title="${esc(ITEM_BY_KEY[x.key].name)}: in ${x.g.toLocaleString()} of ${rb.games.toLocaleString()} final inventories"><img src="${itemImg(x.key)}" alt="" loading="lazy"><div class="pn">${esc(ITEM_BY_KEY[x.key].name)}</div>${pct(x.share, 0)} of games</div>`).join('')}</div>`;
+    }
+    html += `<div class="note">${esc(h.name)} is played both as a core and as a support. These routes come from pro matches in the last 180 days, split by farm priority (support means 4th or 5th in net worth on the team), and show what players ended the game holding, ordered roughly by when each item is bought. Items sold before the end are undercounted.</div>`;
+  }
+  const core = route(pubBuild, .05, 12);
+  html += `<h4>${flex ? 'Public-match build, all roles' : 'Typical ' + esc(h.name) + ' build'}</h4>`;
   html += core.length ? `<div class="phase">${core.map(x => `<div class="pi" title="${esc(ITEM_BY_KEY[x.key].name)}: ${x.g.toLocaleString()} games, bought around minute ${x.min}"><img src="${itemImg(x.key)}" alt="" loading="lazy"><div class="pn">${esc(ITEM_BY_KEY[x.key].name)}</div>~${x.min} min · <span class="${x.wr >= .5 ? 'g' : 'b'}">${pct(x.wr, 0)}</span></div>`).join('')}</div>
     <div class="note">The items this hero buys most in public matches, in the order they are usually finished, with the win rate of games where it was bought. Later items show higher win rates partly because winning teams get to buy them.</div>` : '<div class="dim">No build data for this hero.</div>';
 
-  html += `<h4>${esc(h.name)} items against the enemy draft</h4>`;
+  html += `<h4>${esc(h.name)} items against the enemy draft${flex ? ` <span class="seg" style="margin-left:8px"><button data-aud="c" class="${side === 'c' ? 'on' : ''}">Core</button><button data-aud="s" class="${side === 's' ? 'on' : ''}">Support</button></span>` : ''}</h4>`;
   if (!S.enemies.length) html += '<div class="dim">Add enemy heroes to see which items answer them.</div>';
   else {
-    const items = counterItems(h).slice(0, 8);
+    const items = counterItems(h, build).slice(0, 8);
     html += items.length ? items.map(it => {
       const info = ITEM_BY_KEY[it.key];
       const why = [...it.reasons].map(([text, ids]) => `${esc(text)} <span class="chips" style="display:inline-flex;vertical-align:middle;margin:0">${[...ids].map(id => `<span class="chip" style="padding:1px" title="${esc(H.get(id).name)}"><img src="${heroImg(H.get(id))}" alt="${esc(H.get(id).name)}"></span>`).join('')}</span>`).join('<br>');
       return `<div class="item"><img src="${itemImg(it.key)}" alt="" loading="lazy"><div><b>${esc(info.name)}</b> <span class="dim">${info.cost.toLocaleString()} gold${it.use ? ` · ${it.use.share >= .15 ? 'common' : it.use.share >= .03 ? 'situational' : 'rare'} on ${esc(h.name)}${it.use.g >= 50 ? `, ${pct(it.use.wr, 0)} win rate when bought` : ''}` : ''}</span><div class="why">${why}</div></div></div>`;
     }).join('') : `<div class="dim">None of the usual counter items for these enemies are things ${esc(h.name)} normally builds.</div>`;
-    html += `<div class="note">Which items answer which enemy is rule-based, from general game knowledge. The list only includes items ${esc(h.name)} is actually seen building in public matches.</div>`;
+    html += `<div class="note">Which items answer which enemy is rule-based, from general game knowledge. The list only includes items ${esc(h.name)} is actually seen building ${flex ? 'in that role in pro matches' : 'in public matches'}.</div>`;
   }
 
   html += '<h4>Most bought items by phase (pro matches)</h4><div id="pop" class="dim">Loading…</div>';
@@ -469,10 +498,11 @@ document.addEventListener('click', e => {
   const t = e.target;
   let el;
   if ((el = t.closest('[data-rm]'))) { e.stopPropagation(); return remove(el.dataset.rm, +el.dataset.id); }
-  if ((el = t.closest('[data-slot="allies"]'))) { S.me = +el.dataset.id; S.focus = null; S.mode = 'allies'; return render(); }
+  if ((el = t.closest('[data-slot="allies"]'))) { S.me = +el.dataset.id; S.focus = null; S.aud = null; S.mode = 'allies'; return render(); }
   if ((el = t.closest('[data-add]'))) return add(S.mode, +el.dataset.add);
   if ((el = t.closest('[data-do]'))) return add(el.dataset.do, +el.dataset.id);
-  if ((el = t.closest('[data-focus]'))) { S.focus = +el.dataset.focus; S.tab = 'build'; return render(); }
+  if ((el = t.closest('[data-focus]'))) { S.focus = +el.dataset.focus; S.aud = null; S.tab = 'build'; return render(); }
+  if ((el = t.closest('[data-aud]'))) { S.aud = el.dataset.aud; return render(); }
   if ((el = t.closest('[data-tab]'))) { S.tab = el.dataset.tab; if (S.tab !== 'build') S.focus = null; return render(); }
   if ((el = t.closest('.side'))) { S.mode = el.dataset.mode; return render(); }
 });
@@ -485,7 +515,7 @@ $('#q').addEventListener('keydown', e => {
 $('#bracket').value = S.bracket; $('#role').value = S.role;
 $('#bracket').addEventListener('change', e => { S.bracket = e.target.value; render(); });
 $('#role').addEventListener('change', e => { S.role = e.target.value; render(); });
-$('#reset').addEventListener('click', () => { Object.assign(S, { allies:[], enemies:[], bans:[], me:null, focus:null }); render(); });
+$('#reset').addEventListener('click', () => { Object.assign(S, { allies:[], enemies:[], bans:[], me:null, focus:null, aud:null }); render(); });
 
 render();
 
