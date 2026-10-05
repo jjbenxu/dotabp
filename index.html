@@ -182,19 +182,10 @@ const H = new Map(D.heroes.map(h => [h.id, h]));
 const byKey = new Map(D.heroes.map(h => [h.key, h]));
 const IDX = new Map(D.ids.map((id, i) => [id, i]));
 const ITEM_BY_KEY = {};
-for (const [id, [key, name, cost]] of Object.entries(D.items)) ITEM_BY_KEY[key] = { id, key, name, cost };
+for (const [id, [key, name, cost, built, comps]] of Object.entries(D.items)) ITEM_BY_KEY[key] = { id, key, name, cost, built, comps: comps || [] };
 
 /* ---------- counter-item rules (curated game knowledge, not statistics) ---------- */
 const list = s => s.trim().split(/\s+/);
-// aud: who usually buys it. core / support / any. melee: melee heroes only.
-const ITEM_AUD = {
-  monkey_king_bar:'core', mjollnir:'core', bfury:'core-melee', shivas_guard:'core', spirit_vessel:'any', skadi:'core',
-  silver_edge:'core', dust:'any', gem:'any', black_king_bar:'core', pipe:'any', glimmer_cape:'support', mage_slayer:'core',
-  eternal_shroud:'core', sphere:'core', lotus_orb:'any', aeon_disk:'any', ghost:'support', heavens_halberd:'any',
-  assault:'core', solar_crest:'support', crimson_guard:'any', orchid:'core', sheepstick:'any', rod_of_atos:'any',
-  abyssal_blade:'core-melee', nullifier:'core', diffusal_blade:'core', manta:'core', cyclone:'any', force_staff:'any',
-  blade_mail:'core',
-};
 const TRAITS = [
   { name:'evasion', w:3, heroes:list('phantom_assassin windrunner brewmaster arc_warden hoodwink'),
     items:{ monkey_king_bar:'True Strike stops your attacks missing against their evasion' } },
@@ -237,7 +228,7 @@ const TRAITS = [
 ];
 
 /* ---------- state ---------- */
-const S = Object.assign({ allies:[], enemies:[], bans:[], me:null, focus:null, mode:'enemies', bracket:'all', role:'', tab:'pick', aud:null },
+const S = Object.assign({ allies:[], enemies:[], bans:[], me:null, focus:null, mode:'enemies', bracket:'all', role:'', tab:'pick' },
   (() => { try { return JSON.parse(localStorage.getItem('draft') || '{}'); } catch { return {}; } })());
 for (const k of ['allies','enemies','bans']) S[k] = (S[k] || []).filter(id => H.has(id));
 if (!H.has(S.me)) S.me = null;
@@ -365,33 +356,39 @@ async function loadPopularity(id) {
   return p;
 }
 
-function counterItems(h, aud) {
-  const melee = h.atk === 'Melee', scored = {};
+// Items this hero actually builds: key -> { g, wr, min, share } from OpenDota item timings.
+function heroBuild(h) {
+  const b = (D.builds || {})[h.id] || {}, top = Math.max(1, ...Object.values(b).map(x => x[0])), out = {};
+  for (const [key, [g, w, min]] of Object.entries(b)) out[key] = { key, g, wr: w / g, min, share: g / top };
+  return out;
+}
+const ALWAYS = new Set(['dust', 'gem']);   // cheap detection, anyone can carry it
+const MIN_SHARE = .004;
+
+// Counter items for the enemy draft, limited to items this hero is actually seen building.
+function counterItems(h) {
+  const build = heroBuild(h), scored = {};
   for (const e of S.enemies) {
     const eh = H.get(e);
     for (const tr of TRAITS) {
       if (!tr.heroes.includes(eh.key)) continue;
       for (const [key, why] of Object.entries(tr.items)) {
-        const a = ITEM_AUD[key] || 'any';
-        if (a.endsWith('-melee') && !melee) continue;
-        if (a.startsWith('core') && aud !== 'core') continue;
-        if (a === 'support' && aud !== 'support') continue;
-        if (!ITEM_BY_KEY[key]) continue;
-        const s = scored[key] ??= { key, score: 0, reasons: new Map() };
+        const use = build[key];
+        if (!ITEM_BY_KEY[key] || (!ALWAYS.has(key) && !(use && use.share >= MIN_SHARE))) continue;
+        const s = scored[key] ??= { key, score: 0, use, reasons: new Map() };
         s.score += tr.w || 1;
         if (!s.reasons.has(why)) s.reasons.set(why, new Set());
         s.reasons.get(why).add(e);
       }
     }
   }
-  return Object.values(scored)
-    .sort((a, b) => b.score - a.score || ITEM_BY_KEY[a.key].cost - ITEM_BY_KEY[b.key].cost);
+  const val = s => s.score * Math.pow(s.use ? s.use.share : .05, .35);
+  return Object.values(scored).sort((a, b) => val(b) - val(a));
 }
 
 function renderBuild() {
   const h = H.get(S.focus ?? S.me ?? S.allies[0]);
   if (!h) { $('#out').innerHTML = '<div class="empty">Pick your hero (add it to your team), or click any hero name in the suggestions, to see its matchups and items.</div>'; return; }
-  const aud = S.aud ?? (h.roles.includes('Carry') || !h.roles.includes('Support') ? 'core' : 'support');
   const all = bracketWR(h, 'all');
   let html = `<div class="hero-head"><img src="${heroImg(h)}" alt="${esc(h.name)}">
     <div><h3>${esc(h.name)}</h3><div class="sub dim">${esc(h.atk)} · ${esc(h.roles.join(', '))}</div>
@@ -402,19 +399,28 @@ function renderBuild() {
   const pro = bracketWR(h, 'pro');
   html += `<div class="brk">Pro<b>${pro.wr === null ? '–' : pct(pro.wr, 0)}</b>${h.pro[0]} picks · ${h.pro[2]} bans</div></div>`;
 
-  html += `<h4>Items against the enemy draft <span class="seg" style="margin-left:8px"><button data-aud="core" class="${aud === 'core' ? 'on' : ''}">Core</button><button data-aud="support" class="${aud === 'support' ? 'on' : ''}">Support</button></span></h4>`;
+  const build = heroBuild(h);
+  // hide an item when the hero usually goes on to upgrade it into something else in the list
+  const upgraded = new Set();
+  for (const x of Object.values(build)) if (x.share >= .05) for (const c of ITEM_BY_KEY[x.key]?.comps || []) if (build[c] && x.g >= .4 * build[c].g) upgraded.add(c);
+  const core = Object.values(build).filter(x => ITEM_BY_KEY[x.key]?.built && x.share >= .05 && !upgraded.has(x.key)).sort((a, b) => b.g - a.g).slice(0, 12).sort((a, b) => a.min - b.min);
+  html += `<h4>Typical ${esc(h.name)} build</h4>`;
+  html += core.length ? `<div class="phase">${core.map(x => `<div class="pi" title="${esc(ITEM_BY_KEY[x.key].name)}: ${x.g.toLocaleString()} games, bought around minute ${x.min}"><img src="${itemImg(x.key)}" alt="" loading="lazy"><div class="pn">${esc(ITEM_BY_KEY[x.key].name)}</div>~${x.min} min · <span class="${x.wr >= .5 ? 'g' : 'b'}">${pct(x.wr, 0)}</span></div>`).join('')}</div>
+    <div class="note">The items this hero buys most in public matches, in the order they are usually finished, with the win rate of games where it was bought. Later items show higher win rates partly because winning teams get to buy them.</div>` : '<div class="dim">No build data for this hero.</div>';
+
+  html += `<h4>${esc(h.name)} items against the enemy draft</h4>`;
   if (!S.enemies.length) html += '<div class="dim">Add enemy heroes to see which items answer them.</div>';
   else {
-    const items = counterItems(h, aud).slice(0, 9);
+    const items = counterItems(h).slice(0, 8);
     html += items.length ? items.map(it => {
       const info = ITEM_BY_KEY[it.key];
       const why = [...it.reasons].map(([text, ids]) => `${esc(text)} <span class="chips" style="display:inline-flex;vertical-align:middle;margin:0">${[...ids].map(id => `<span class="chip" style="padding:1px" title="${esc(H.get(id).name)}"><img src="${heroImg(H.get(id))}" alt="${esc(H.get(id).name)}"></span>`).join('')}</span>`).join('<br>');
-      return `<div class="item"><img src="${itemImg(it.key)}" alt="" loading="lazy"><div><b>${esc(info.name)}</b> <span class="dim">${info.cost.toLocaleString()} gold</span><div class="why">${why}</div></div></div>`;
-    }).join('') : '<div class="dim">No specific counter items for these enemies.</div>';
-    html += '<div class="note">These are rule-based suggestions from general game knowledge, matched to what each enemy hero does. They are not computed from match statistics.</div>';
+      return `<div class="item"><img src="${itemImg(it.key)}" alt="" loading="lazy"><div><b>${esc(info.name)}</b> <span class="dim">${info.cost.toLocaleString()} gold${it.use ? ` · ${it.use.share >= .15 ? 'common' : it.use.share >= .03 ? 'situational' : 'rare'} on ${esc(h.name)}${it.use.g >= 50 ? `, ${pct(it.use.wr, 0)} win rate when bought` : ''}` : ''}</span><div class="why">${why}</div></div></div>`;
+    }).join('') : `<div class="dim">None of the usual counter items for these enemies are things ${esc(h.name)} normally builds.</div>`;
+    html += `<div class="note">Which items answer which enemy is rule-based, from general game knowledge. The list only includes items ${esc(h.name)} is actually seen building in public matches.</div>`;
   }
 
-  html += '<h4>Most bought items (pro matches)</h4><div id="pop" class="dim">Loading…</div>';
+  html += '<h4>Most bought items by phase (pro matches)</h4><div id="pop" class="dim">Loading…</div>';
 
   if (IDX.has(h.id)) {
     const mus = D.heroes.filter(o => o.id !== h.id && IDX.has(o.id)).map(o => ({ o, ...adv(h.id, o.id) })).filter(m => m.wr !== null).sort((a, b) => b.v - a.v);
@@ -463,11 +469,10 @@ document.addEventListener('click', e => {
   const t = e.target;
   let el;
   if ((el = t.closest('[data-rm]'))) { e.stopPropagation(); return remove(el.dataset.rm, +el.dataset.id); }
-  if ((el = t.closest('[data-slot="allies"]'))) { S.me = +el.dataset.id; S.focus = null; S.aud = null; S.mode = 'allies'; return render(); }
+  if ((el = t.closest('[data-slot="allies"]'))) { S.me = +el.dataset.id; S.focus = null; S.mode = 'allies'; return render(); }
   if ((el = t.closest('[data-add]'))) return add(S.mode, +el.dataset.add);
   if ((el = t.closest('[data-do]'))) return add(el.dataset.do, +el.dataset.id);
-  if ((el = t.closest('[data-focus]'))) { S.focus = +el.dataset.focus; S.aud = null; S.tab = 'build'; return render(); }
-  if ((el = t.closest('[data-aud]'))) { S.aud = el.dataset.aud; return render(); }
+  if ((el = t.closest('[data-focus]'))) { S.focus = +el.dataset.focus; S.tab = 'build'; return render(); }
   if ((el = t.closest('[data-tab]'))) { S.tab = el.dataset.tab; if (S.tab !== 'build') S.focus = null; return render(); }
   if ((el = t.closest('.side'))) { S.mode = el.dataset.mode; return render(); }
 });
@@ -480,7 +485,7 @@ $('#q').addEventListener('keydown', e => {
 $('#bracket').value = S.bracket; $('#role').value = S.role;
 $('#bracket').addEventListener('change', e => { S.bracket = e.target.value; render(); });
 $('#role').addEventListener('change', e => { S.role = e.target.value; render(); });
-$('#reset').addEventListener('click', () => { Object.assign(S, { allies:[], enemies:[], bans:[], me:null, focus:null, aud:null }); render(); });
+$('#reset').addEventListener('click', () => { Object.assign(S, { allies:[], enemies:[], bans:[], me:null, focus:null }); render(); });
 
 render();
 

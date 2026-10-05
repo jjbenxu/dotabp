@@ -2,7 +2,8 @@
 """Rebuild data.js (hero-vs-hero and hero-with-hero win rates) from OpenDota.
 
 Aggregates recent ranked All Pick public matches through the OpenDota explorer.
-Usage: python3 update_data.py [days]   (default 14)
+Usage: python3 update_data.py [days]   (default 14, takes about 15 minutes)
+       python3 update_data.py meta     (refresh only heroes, items and item builds)
 """
 import json, sys, time, urllib.parse, urllib.request, datetime
 
@@ -13,7 +14,7 @@ FILTER = "lobby_type = 7 AND game_mode = 22"
 
 def get(url):
     req = urllib.request.Request(url, headers={"User-Agent": "dota-draft-helper"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
 
 def sql(q):
@@ -38,7 +39,7 @@ unnest(t.team) a, unnest(t.team) b
 WHERE match_id > {lo} AND match_id <= {hi} AND {f} AND a > 0 AND a < b GROUP BY a, b"""
 
 def meta():
-    """Hero basics with per-rank win rates, and an item id -> [key, name, cost] map."""
+    """Hero basics with per-rank win rates, and an item id -> [key, name, cost, assembled, components] map."""
     heroes = []
     for h in get(API + "/heroStats"):
         heroes.append({
@@ -47,11 +48,51 @@ def meta():
             "b": [[h.get(f"{i}_pick") or 0, h.get(f"{i}_win") or 0] for i in range(1, 9)],
             "pro": [h.get("pro_pick") or 0, h.get("pro_win") or 0, h.get("pro_ban") or 0],
         })
-    items = {v["id"]: [k, v.get("dname") or k, v.get("cost") or 0]
+    # last field: 1 for assembled items (plus a few standalone ones), 0 for basic components
+    standalone = {"blink", "ghost", "gem", "aghanims_shard"}
+    items = {v["id"]: [k, v.get("dname") or k, v.get("cost") or 0, int(bool(v.get("components")) or k in standalone),
+                        v.get("components") or []]
              for k, v in get(API + "/constants/items").items()}
     return heroes, items
 
+def builds(heroes):
+    """Per hero: item key -> [games, wins, average purchase minute], from OpenDota item timings."""
+    out = {}
+    for n, h in enumerate(heroes):
+        acc = {}
+        rows = None
+        for attempt in range(4):
+            try:
+                rows = get(f"{API}/scenarios/itemTimings?hero_id={h['id']}")
+                break
+            except Exception as e:
+                print("  retry:", e, flush=True); time.sleep(20 * (attempt + 1))
+        if rows is None:
+            sys.exit(f"could not load item timings for {h['name']}; data.js left unchanged")
+        for r in rows:
+            g, w = int(r["games"]), int(r["wins"])
+            c = acc.setdefault(r["item"], [0, 0, 0]); c[0] += g; c[1] += w; c[2] += g * r["time"]
+        out[h["id"]] = {k: [g, w, round(t / g / 60)] for k, (g, w, t) in acc.items() if g >= 5}
+        if n % 20 == 0: print(f"item builds: {n}/{len(heroes)}", flush=True)
+        time.sleep(1.1)
+    return out
+
+def write(data):
+    with open("data.js", "w") as f:
+        f.write("window.DRAFT_DATA = " + json.dumps(data, separators=(",", ":")) + ";\n")
+
+def refresh_meta():
+    """Refresh heroes, items and item builds, keeping the existing matchup matrices."""
+    raw = open("data.js").read()
+    data = json.loads(raw[raw.index("{"):].rstrip().rstrip(";"))
+    data["heroes"], data["items"] = meta()
+    data["builds"] = builds(data["heroes"])
+    write(data)
+    print("refreshed heroes, items and item builds in data.js")
+
 def main():
+    if sys.argv[1:] == ["meta"]:
+        return refresh_meta()
     days = int(sys.argv[1]) if len(sys.argv) > 1 else 14
     top = sql("SELECT match_id FROM public_matches ORDER BY match_id DESC LIMIT 1")[0]["match_id"]
     lo_all = top - days * IDS_PER_DAY
@@ -93,6 +134,7 @@ def main():
     data = {
         "heroes": heroes,
         "items": items,
+        "builds": builds(heroes),
         "updated": datetime.date.today().isoformat(),
         "days": days,
         "matches": matches // 25,
@@ -101,8 +143,7 @@ def main():
         "vs": matrix(vs, False),    # vs[a] = [games, wins_of_a, ...] against each hero in ids order
         "syn": matrix(syn, True),   # syn[a] = [games, wins, ...] when on the same team
     }
-    with open("data.js", "w") as f:
-        f.write("window.DRAFT_DATA = " + json.dumps(data, separators=(",", ":")) + ";\n")
+    write(data)
     print(f"wrote data.js: {len(ids)} heroes, {data['matches']:,} matches")
 
 if __name__ == "__main__":
